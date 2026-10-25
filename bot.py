@@ -18,12 +18,14 @@ if not BOT_TOKEN:
     logging.error("Токен бота не найден в переменных окружения!")
     sys.exit(1)
 
-# --- Фоновый веб-сервер для Health Check на Render ---
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
+        
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", "2")
         self.end_headers()
-        self.wfile.write(b"Tiles Timer Calc Bot is active 24/7!")
+        self.wfile.write(b"OK")
         
     def log_message(self, format, *args):
         return
