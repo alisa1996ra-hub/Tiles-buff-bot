@@ -2,13 +2,15 @@ import os
 import logging
 import sys
 import asyncio
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 
-# Настройка логов
+# Настройка логирования
 logging.basicConfig(level=logging.INFO, stream=sys.stdout)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -16,9 +18,30 @@ if not BOT_TOKEN:
     logging.error("Токен бота не найден в переменных окружения!")
     sys.exit(1)
 
+# --- Фоновый HTTP-сервер для соответствия требованиям Render ---
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Tiles Buff Bot is alive and working 24/7!")
+        
+    def log_message(self, format, *args):
+        # Отключаем лишний мусор в логах от пингов
+        return
+
+def run_health_server():
+    port = int(os.getenv("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+    logging.info(f"Health-check server started on port {port}")
+    server.serve_forever()
+
+# Запускаем веб-сервер в отдельном фоновом потоке
+threading.Thread(target=run_health_server, daemon=True).start()
+# -------------------------------------------------------------
+
 router = Router()
 
-# Состояния для FSM (ожидание кастомного ввода)
+# Состояния для FSM
 class CalcState(StatesGroup):
     waiting_for_building_days = State()
     waiting_for_research_days = State()
@@ -52,35 +75,31 @@ def back_to_menu_kb():
         [InlineKeyboardButton(text="⬅️ В главное меню", callback_data="back_main")]
     ])
 
-# --- Логика расчетов (заменишь на свои формулы) ---
+# --- Логика расчетов ---
 
 def calculate_building(days: int) -> str:
-    # Твоя математика баффов для стройки
     hours = days * 24
     return (
         f"🏗 **Расчет для стройки ({days} дн. / {hours} ч.):**\n\n"
         f"• Требуемый суммарный бафф скорости: ...\n"
-        f"• Рекомендуемый план ускорителей / помощи союза: ...\n"
-        f"*(Здесь подставляются твои алгоритмы)*"
+        f"• Рекомендуемый план ускорителей / помощи союза: ..."
     )
 
 def calculate_research(days: int) -> str:
-    # Твоя математика баффов для исследований
     hours = days * 24
     return (
         f"🔬 **Расчет для исследований ({days} дн. / {hours} ч.):**\n\n"
         f"• Оптимальный тайминг под ковровые баффы: ...\n"
-        f"• Необходимый процент снижения времени: ...\n"
-        f"*(Здесь подставляются твои алгоритмы)*"
+        f"• Необходимый процент снижения времени: ..."
     )
 
-# --- Хэндлеры (Обработчики) ---
+# --- Хэндлеры ---
 
 @router.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(
-        "🤖 **Калькулятор баффов альянса запущен.**\n\n"
+        "🤖 **Калькулятор баффов альянса запущен в облаке.**\n\n"
         "Выбери категорию задачи:",
         reply_markup=main_menu_kb(),
         parse_mode="Markdown"
@@ -113,7 +132,6 @@ async def cb_research_menu(callback: CallbackQuery):
     )
     await callback.answer()
 
-# Обработка фиксированных кнопок стройки
 @router.callback_query(F.data.in_({"b_3", "b_5"}))
 async def cb_building_fixed(callback: CallbackQuery):
     days = 3 if callback.data == "b_3" else 5
@@ -121,7 +139,6 @@ async def cb_building_fixed(callback: CallbackQuery):
     await callback.message.edit_text(result_text, reply_markup=back_to_menu_kb(), parse_mode="Markdown")
     await callback.answer()
 
-# Обработка фиксированных кнопок исследований
 @router.callback_query(F.data.in_({"r_10", "r_15"}))
 async def cb_research_fixed(callback: CallbackQuery):
     days = 10 if callback.data == "r_10" else 15
@@ -129,7 +146,6 @@ async def cb_research_fixed(callback: CallbackQuery):
     await callback.message.edit_text(result_text, reply_markup=back_to_menu_kb(), parse_mode="Markdown")
     await callback.answer()
 
-# Запрос кастомного ввода для стройки (1-20)
 @router.callback_query(F.data == "b_custom")
 async def cb_building_custom_prompt(callback: CallbackQuery, state: FSMContext):
     await state.set_state(CalcState.waiting_for_building_days)
@@ -139,7 +155,6 @@ async def cb_building_custom_prompt(callback: CallbackQuery, state: FSMContext):
     )
     await callback.answer()
 
-# Обработка ввода цифры для стройки
 @router.message(CalcState.waiting_for_building_days)
 async def process_building_custom(message: Message, state: FSMContext):
     if not message.text.isdigit():
@@ -155,7 +170,6 @@ async def process_building_custom(message: Message, state: FSMContext):
     result_text = calculate_building(days)
     await message.answer(result_text, reply_markup=back_to_menu_kb(), parse_mode="Markdown")
 
-# Запрос кастомного ввода для исследований (1-25)
 @router.callback_query(F.data == "r_custom")
 async def cb_research_custom_prompt(callback: CallbackQuery, state: FSMContext):
     await state.set_state(CalcState.waiting_for_research_days)
@@ -165,7 +179,6 @@ async def cb_research_custom_prompt(callback: CallbackQuery, state: FSMContext):
     )
     await callback.answer()
 
-# Обработка ввода цифры для исследований
 @router.message(CalcState.waiting_for_research_days)
 async def process_research_custom(message: Message, state: FSMContext):
     if not message.text.isdigit():
@@ -187,7 +200,7 @@ async def main():
     dp = Dispatcher()
     dp.include_router(router)
     await bot.delete_webhook(drop_pending_updates=True)
-    logging.info("Бот запущен и готов принимать задачи!")
+    logging.info("Бот успешно запущен в облаке!")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
