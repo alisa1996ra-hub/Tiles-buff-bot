@@ -18,15 +18,14 @@ if not BOT_TOKEN:
     logging.error("Токен бота не найден в переменных окружения!")
     sys.exit(1)
 
-# --- Фоновый HTTP-сервер для соответствия требованиям Render ---
+# --- Фоновый HTTP-сервер для Health Check на Render ---
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Tiles Buff Bot is alive and working 24/7!")
+        self.wfile.write(b"Tiles Timer Calc Bot is active 24/7!")
         
     def log_message(self, format, *args):
-        # Отключаем лишний мусор в логах от пингов
         return
 
 def run_health_server():
@@ -35,63 +34,46 @@ def run_health_server():
     logging.info(f"Health-check server started on port {port}")
     server.serve_forever()
 
-# Запускаем веб-сервер в отдельном фоновом потоке
 threading.Thread(target=run_health_server, daemon=True).start()
-# -------------------------------------------------------------
+# -----------------------------------------------------
 
 router = Router()
 
-# Состояния для FSM
+# Состояния FSM
 class CalcState(StatesGroup):
-    waiting_for_building_days = State()
-    waiting_for_research_days = State()
+    waiting_for_timer = State()
 
 # --- Клавиатуры ---
 
 def main_menu_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🏗 Строительство", callback_data="menu_building")],
-        [InlineKeyboardButton(text="🔬 Исследования", callback_data="menu_research")]
+        [InlineKeyboardButton(text="🏗 Строительство", callback_data="cat_building")],
+        [InlineKeyboardButton(text="🔬 Исследования", callback_data="cat_research")]
     ])
 
-def building_kb():
+def building_targets_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="До 3 дней", callback_data="b_3"),
-         InlineKeyboardButton(text="До 5 дней", callback_data="b_5")],
-        [InlineKeyboardButton(text="✏️ Свое количество (1-20 дней)", callback_data="b_custom")],
-        [InlineKeyboardButton(text="⬅️ Назад в меню", callback_data="back_main")]
+        [InlineKeyboardButton(text="Цель: до 3 дней", callback_data="target_b_3"),
+         InlineKeyboardButton(text="Цель: до 5 дней", callback_data="target_b_5")],
+        [InlineKeyboardButton(text="⬅️ Главное меню", callback_data="back_main")]
     ])
 
-def research_kb():
+def research_targets_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="10 дней", callback_data="r_10"),
-         InlineKeyboardButton(text="15 дней", callback_data="r_15")],
-        [InlineKeyboardButton(text="✏️ Свое количество (1-25 дней)", callback_data="r_custom")],
-        [InlineKeyboardButton(text="⬅️ Назад в меню", callback_data="back_main")]
+        [InlineKeyboardButton(text="Цель: до 10 дней", callback_data="target_r_10"),
+         InlineKeyboardButton(text="Цель: до 15 дней", callback_data="target_r_15")],
+        [InlineKeyboardButton(text="⬅️ Главное меню", callback_data="back_main")]
     ])
 
-def back_to_menu_kb():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⬅️ В главное меню", callback_data="back_main")]
-    ])
-
-# --- Логика расчетов ---
-
-def calculate_building(days: int) -> str:
-    hours = days * 24
-    return (
-        f"🏗 **Расчет для стройки ({days} дн. / {hours} ч.):**\n\n"
-        f"• Требуемый суммарный бафф скорости: ...\n"
-        f"• Рекомендуемый план ускорителей / помощи союза: ..."
-    )
-
-def calculate_research(days: int) -> str:
-    hours = days * 24
-    return (
-        f"🔬 **Расчет для исследований ({days} дн. / {hours} ч.):**\n\n"
-        f"• Оптимальный тайминг под ковровые баффы: ...\n"
-        f"• Необходимый процент снижения времени: ..."
-    )
+# --- Математический движок расчета таймеров ---
+def calculate_buffs(source_days: float, target_days: float) -> tuple[int, float]:
+    current = source_days
+    buffs_count = 0
+    # Каждое применение уменьшает таймер на 15% (множитель 0.85)
+    while current > target_days and buffs_count < 10000:
+        current *= (1 - 0.15)
+        buffs_count += 1
+    return buffs_count, round(current, 2)
 
 # --- Хэндлеры ---
 
@@ -99,8 +81,7 @@ def calculate_research(days: int) -> str:
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(
-        "🤖 **Калькулятор баффов альянса запущен в облаке.**\n\n"
-        "Выбери категорию задачи:",
+        "⏳ **Калькулятор редукции таймеров**\n\nВыбери тип задачи:",
         reply_markup=main_menu_kb(),
         parse_mode="Markdown"
     )
@@ -109,90 +90,78 @@ async def cmd_start(message: Message, state: FSMContext):
 async def cb_back_main(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.message.edit_text(
-        "Выбери категорию задачи:",
-        reply_markup=main_menu_kb()
-    )
-    await callback.answer()
-
-@router.callback_query(F.data == "menu_building")
-async def cb_building_menu(callback: CallbackQuery):
-    await callback.message.edit_text(
-        "🏗 **Категория: Строительство**\nВыберите фиксированный вариант или введите свое значение:",
-        reply_markup=building_kb(),
+        "⏳ **Калькулятор редукции таймеров**\n\nВыбери тип задачи:",
+        reply_markup=main_menu_kb(),
         parse_mode="Markdown"
     )
     await callback.answer()
 
-@router.callback_query(F.data == "menu_research")
-async def cb_research_menu(callback: CallbackQuery):
+@router.callback_query(F.data == "cat_building")
+async def cb_building(callback: CallbackQuery, state: FSMContext):
+    await state.update_data(mode="Строительство")
     await callback.message.edit_text(
-        "🔬 **Категория: Исследования**\nВыберите фиксированный вариант или введите свое значение:",
-        reply_markup=research_kb(),
+        "🏗 **Режим: строительство**\nВыберите целевой порог дней:",
+        reply_markup=building_targets_kb(),
         parse_mode="Markdown"
     )
     await callback.answer()
 
-@router.callback_query(F.data.in_({"b_3", "b_5"}))
-async def cb_building_fixed(callback: CallbackQuery):
-    days = 3 if callback.data == "b_3" else 5
-    result_text = calculate_building(days)
-    await callback.message.edit_text(result_text, reply_markup=back_to_menu_kb(), parse_mode="Markdown")
-    await callback.answer()
-
-@router.callback_query(F.data.in_({"r_10", "r_15"}))
-async def cb_research_fixed(callback: CallbackQuery):
-    days = 10 if callback.data == "r_10" else 15
-    result_text = calculate_research(days)
-    await callback.message.edit_text(result_text, reply_markup=back_to_menu_kb(), parse_mode="Markdown")
-    await callback.answer()
-
-@router.callback_query(F.data == "b_custom")
-async def cb_building_custom_prompt(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(CalcState.waiting_for_building_days)
+@router.callback_query(F.data == "cat_research")
+async def cb_research(callback: CallbackQuery, state: FSMContext):
+    await state.update_data(mode="Исследования")
     await callback.message.edit_text(
-        "✏️ Введите количество дней для **стройки** (число от 1 до 20):",
+        "🔬 **Режим: исследования**\nВыберите целевой порог дней:",
+        reply_markup=research_targets_kb(),
         parse_mode="Markdown"
     )
     await callback.answer()
 
-@router.message(CalcState.waiting_for_building_days)
-async def process_building_custom(message: Message, state: FSMContext):
-    if not message.text.isdigit():
-        await message.answer("⚠️ Пожалуйста, введите целое число от 1 до 20.")
-        return
+@router.callback_query(F.data.startswith("target_"))
+async def cb_set_target(callback: CallbackQuery, state: FSMContext):
+    parts = callback.data.split("_")
+    target_val = float(parts[2])
     
-    days = int(message.text)
-    if not (1 <= days <= 20):
-        await message.answer("⚠️ Число должно быть в диапазоне от 1 до 20. Попробуйте еще раз:")
-        return
-
-    await state.clear()
-    result_text = calculate_building(days)
-    await message.answer(result_text, reply_markup=back_to_menu_kb(), parse_mode="Markdown")
-
-@router.callback_query(F.data == "r_custom")
-async def cb_research_custom_prompt(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(CalcState.waiting_for_research_days)
+    await state.update_data(target=target_val)
+    await state.set_state(CalcState.waiting_for_timer)
+    
+    data = await state.get_data()
+    mode_name = data.get("mode", "Задача")
+    
     await callback.message.edit_text(
-        "✏️ Введите количество дней для **исследований** (число от 1 до 25):",
+        f"⏳ Режим: {mode_name.lower()} (цель: до {target_val:g} дн.).\n\n"
+        f"Введите текущее время таймера в днях:",
         parse_mode="Markdown"
     )
     await callback.answer()
 
-@router.message(CalcState.waiting_for_research_days)
-async def process_research_custom(message: Message, state: FSMContext):
-    if not message.text.isdigit():
-        await message.answer("⚠️ Пожалуйста, введите целое число от 1 до 25.")
-        return
-    
-    days = int(message.text)
-    if not (1 <= days <= 25):
-        await message.answer("⚠️ Число должно быть в диапазоне от 1 до 25. Попробуйте еще раз:")
+@router.message(CalcState.waiting_for_timer)
+async def process_timer_input(message: Message, state: FSMContext):
+    text = message.text.replace(",", ".")
+    try:
+        source_days = float(text)
+        if source_days <= 0:
+            raise ValueError()
+    except ValueError:
+        await message.answer("⚠️ Введите корректное число (например, `500` или `1000`):", parse_mode="Markdown")
         return
 
+    data = await state.get_data()
+    mode = data.get("mode", "Задача")
+    target = data.get("target", 3.0)
+
+    buffs, remainder = calculate_buffs(source_days, target)
     await state.clear()
-    result_text = calculate_research(days)
-    await message.answer(result_text, reply_markup=back_to_menu_kb(), parse_mode="Markdown")
+
+    result_text = (
+        f"📊 **Результат ({mode}):**\n"
+        f"• Исходник: {source_days} дн.\n"
+        f"• Цель: {target:g} дн.\n"
+        f"• Баффов нужно (-15%): 🧩 {buffs} шт.\n"
+        f"• Остаток: {remainder} дн.\n\n"
+        f"🔄 /start для нового расчета."
+    )
+
+    await message.answer(result_text, parse_mode="Markdown")
 
 # --- Запуск ---
 async def main():
